@@ -1,6 +1,7 @@
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
+import { strToU8, zipSync } from "fflate";
 import { describe, expect, it } from "vitest";
 import {
   diff,
@@ -100,6 +101,13 @@ describe("Sheetra pipeline", () => {
     await rm(dir, { recursive: true, force: true });
   });
 
+  it("counts CSV rows by scanning quoted records without materializing rows", async () => {
+    const input = Buffer.from('id,note\n1,"hello\nworld"\n2,"escaped "" quote"\n\n3,last');
+    const stats = await read(input, { format: "csv" }).drain();
+
+    expect(stats.rowsProcessed).toBe(3);
+  });
+
   it("falls back to the iterator path when CSV pipelines are transformed", async () => {
     const dir = await mkdtemp(join(tmpdir(), "sheetra-"));
     const file = join(dir, "transformed.csv");
@@ -151,6 +159,28 @@ describe("Sheetra pipeline", () => {
 
     const finance = await read(file, { sheet: "Finance" }).collect();
     expect(finance).toEqual([{ label: "Gross", amount: 1200 }]);
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  it("reads shared strings and sparse XLSX cells with the worksheet scanner", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "sheetra-"));
+    const file = join(dir, "shared.xlsx");
+    const files = {
+      "xl/workbook.xml": strToU8(
+        '<workbook xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="Sheet1" sheetId="1" r:id="rId1"/></sheets></workbook>',
+      ),
+      "xl/_rels/workbook.xml.rels": strToU8(
+        '<Relationships><Relationship Id="rId1" Target="worksheets/sheet1.xml"/></Relationships>',
+      ),
+      "xl/sharedStrings.xml": strToU8("<sst><si><t>name</t></si><si><t>score</t></si><si><t>Ada &amp; Co</t></si></sst>"),
+      "xl/worksheets/sheet1.xml": strToU8(
+        '<worksheet><sheetData><row r="1"><c r="A1" t="s"><v>0</v></c><c r="C1" t="s"><v>1</v></c></row><row r="2"><c r="A2" t="s"><v>2</v></c><c r="C2"><v>42</v></c></row></sheetData></worksheet>',
+      ),
+    };
+
+    await writeFile(file, Buffer.from(zipSync(files)));
+
+    await expect(read(file).collect()).resolves.toEqual([{ name: "Ada & Co", _2: null, score: 42 }]);
     await rm(dir, { recursive: true, force: true });
   });
 

@@ -31,6 +31,8 @@ export async function* readCsv(source: string | Buffer, options: ReadOptions = {
 }
 
 export function drainCsvViaEvents(source: string | Buffer, options: ReadOptions = {}): Promise<ProcessStats> {
+  if (canScanCsvRecords(options)) return drainCsvByScanningRecords(source, options);
+
   return new Promise((resolve, reject) => {
     const stats = createStats();
     const input = createCsvParser(source, options);
@@ -41,6 +43,87 @@ export function drainCsvViaEvents(source: string | Buffer, options: ReadOptions 
     input.on("error", reject);
     input.on("end", () => resolve(finishStats(stats)));
   });
+}
+
+function drainCsvByScanningRecords(source: string | Buffer, options: ReadOptions): Promise<ProcessStats> {
+  return new Promise((resolve, reject) => {
+    const stats = createStats();
+    const stream = typeof source === "string" ? createReadStream(source) : Readable.from(source);
+    const scanner = createRecordScanner((options.headers ?? true) === true);
+
+    stream.on("data", (chunk: Buffer | string) => {
+      scanner.scan(typeof chunk === "string" ? Buffer.from(chunk) : chunk);
+      stats.rowsProcessed = scanner.rows;
+      observeMemory(stats);
+    });
+    stream.on("error", reject);
+    stream.on("end", () => {
+      scanner.finish();
+      stats.rowsProcessed = scanner.rows;
+      resolve(finishStats(stats));
+    });
+  });
+}
+
+function canScanCsvRecords(options: ReadOptions): boolean {
+  return (options.delimiter ?? ",").length === 1;
+}
+
+function createRecordScanner(skipFirstRecord: boolean): {
+  readonly rows: number;
+  scan(chunk: Buffer): void;
+  finish(): void;
+} {
+  let inQuotes = false;
+  let quotePending = false;
+  let recordHasValue = false;
+  let records = 0;
+  let rows = 0;
+
+  const endRecord = () => {
+    if (recordHasValue) {
+      records += 1;
+      if (!(skipFirstRecord && records === 1)) rows += 1;
+    }
+    recordHasValue = false;
+    quotePending = false;
+  };
+
+  return {
+    get rows() {
+      return rows;
+    },
+    scan(chunk: Buffer) {
+      for (let index = 0; index < chunk.length; index += 1) {
+        const byte = chunk[index]!;
+
+        if (byte === 34) {
+          if (inQuotes && quotePending) {
+            quotePending = false;
+          } else if (inQuotes) {
+            quotePending = true;
+          } else {
+            inQuotes = true;
+          }
+          recordHasValue = true;
+          continue;
+        }
+
+        if (quotePending) {
+          inQuotes = false;
+          quotePending = false;
+        }
+        if (!inQuotes && byte === 10) {
+          endRecord();
+          continue;
+        }
+        if (byte !== 13) recordHasValue = true;
+      }
+    },
+    finish() {
+      if (recordHasValue) endRecord();
+    },
+  };
 }
 
 export function collectCsvViaEvents(source: string | Buffer, options: ReadOptions = {}): Promise<Row[]> {
