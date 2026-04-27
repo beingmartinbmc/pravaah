@@ -49,7 +49,7 @@ function drainCsvByScanningRecords(source: string | Buffer, options: ReadOptions
   return new Promise((resolve, reject) => {
     const stats = createStats();
     const stream = typeof source === "string" ? createReadStream(source) : Readable.from(source);
-    const scanner = createRecordScanner((options.headers ?? true) === true);
+    const scanner = createRecordScanner((options.headers ?? true) === true, (options.delimiter ?? ",").charCodeAt(0));
 
     stream.on("data", (chunk: Buffer | string) => {
       scanner.scan(typeof chunk === "string" ? Buffer.from(chunk) : chunk);
@@ -69,23 +69,26 @@ function canScanCsvRecords(options: ReadOptions): boolean {
   return (options.delimiter ?? ",").length === 1;
 }
 
-function createRecordScanner(skipFirstRecord: boolean): {
+function createRecordScanner(skipFirstRecord: boolean, delimiter: number): {
   readonly rows: number;
   scan(chunk: Buffer): void;
   finish(): void;
 } {
   let inQuotes = false;
   let quotePending = false;
-  let recordHasValue = false;
+  let atFieldStart = true;
+  let recordHasContent = false;
+  let lastWasCarriageReturn = false;
   let records = 0;
   let rows = 0;
 
   const endRecord = () => {
-    if (recordHasValue) {
+    if (recordHasContent) {
       records += 1;
       if (!(skipFirstRecord && records === 1)) rows += 1;
     }
-    recordHasValue = false;
+    recordHasContent = false;
+    atFieldStart = true;
     quotePending = false;
   };
 
@@ -97,15 +100,18 @@ function createRecordScanner(skipFirstRecord: boolean): {
       for (let index = 0; index < chunk.length; index += 1) {
         const byte = chunk[index]!;
 
-        if (byte === 34) {
+        if (lastWasCarriageReturn) {
+          lastWasCarriageReturn = false;
+          if (byte === 10) continue;
+        }
+
+        if (inQuotes && byte === 34) {
           if (inQuotes && quotePending) {
             quotePending = false;
+            recordHasContent = true;
           } else if (inQuotes) {
             quotePending = true;
-          } else {
-            inQuotes = true;
           }
-          recordHasValue = true;
           continue;
         }
 
@@ -113,15 +119,30 @@ function createRecordScanner(skipFirstRecord: boolean): {
           inQuotes = false;
           quotePending = false;
         }
-        if (!inQuotes && byte === 10) {
+
+        if (!inQuotes && (byte === 10 || byte === 13)) {
           endRecord();
+          lastWasCarriageReturn = byte === 13;
           continue;
         }
-        if (byte !== 13) recordHasValue = true;
+
+        if (!inQuotes && byte === delimiter) {
+          atFieldStart = true;
+          continue;
+        }
+
+        if (!inQuotes && byte === 34 && atFieldStart) {
+          inQuotes = true;
+          atFieldStart = false;
+          continue;
+        }
+
+        recordHasContent = true;
+        atFieldStart = false;
       }
     },
     finish() {
-      if (recordHasValue) endRecord();
+      if (recordHasContent) endRecord();
     },
   };
 }

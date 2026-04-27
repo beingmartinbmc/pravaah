@@ -108,6 +108,13 @@ describe("Sheetra pipeline", () => {
     expect(stats.rowsProcessed).toBe(3);
   });
 
+  it("matches CSV drain edge cases for bare quotes, empty rows, and CR line endings", async () => {
+    const input = Buffer.from('id,note\r1,abc"def\r,,\r2,last');
+    const stats = await read(input, { format: "csv" }).drain();
+
+    expect(stats.rowsProcessed).toBe(2);
+  });
+
   it("falls back to the iterator path when CSV pipelines are transformed", async () => {
     const dir = await mkdtemp(join(tmpdir(), "sheetra-"));
     const file = join(dir, "transformed.csv");
@@ -172,15 +179,15 @@ describe("Sheetra pipeline", () => {
       "xl/_rels/workbook.xml.rels": strToU8(
         '<Relationships><Relationship Id="rId1" Target="worksheets/sheet1.xml"/></Relationships>',
       ),
-      "xl/sharedStrings.xml": strToU8("<sst><si><t>name</t></si><si><t>score</t></si><si><t>Ada &amp; Co</t></si></sst>"),
+      "xl/sharedStrings.xml": strToU8("<sst><si><t>name</t></si><si><t>score</t></si><si><t>Ada &#38; Co&#10;LLC</t></si></sst>"),
       "xl/worksheets/sheet1.xml": strToU8(
-        '<worksheet><sheetData><row r="1"><c r="A1" t="s"><v>0</v></c><c r="C1" t="s"><v>1</v></c></row><row r="2"><c r="A2" t="s"><v>2</v></c><c r="C2"><v>42</v></c></row></sheetData></worksheet>',
+        "<worksheet><sheetData><row r='1'><c r='A1' t='s'><v>0</v></c><c r='C1' t='s'><v>1</v></c></row><row r='2'><c r='A2' t='s'><v>2</v></c><c r='C2'><v>42</v></c></row></sheetData></worksheet>",
       ),
     };
 
     await writeFile(file, Buffer.from(zipSync(files)));
 
-    await expect(read(file).collect()).resolves.toEqual([{ name: "Ada & Co", _2: null, score: 42 }]);
+    await expect(read(file).collect()).resolves.toEqual([{ name: "Ada & Co\nLLC", _2: null, score: 42 }]);
     await rm(dir, { recursive: true, force: true });
   });
 

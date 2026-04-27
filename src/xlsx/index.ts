@@ -296,7 +296,7 @@ function readWorksheetValueRow(rowXml: string, sharedStrings: string[], options:
     if (cellOpenEnd === -1) break;
 
     const openTag = rowXml.slice(cellStart, cellOpenEnd + 1);
-    const attrs = parseXmlAttributes(openTag);
+    const attrs = parseCellAttributes(openTag);
     const ref = attrs.r;
     const columnIndex = ref === undefined ? implicitColumn : cellRefToColumnIndex(ref);
     implicitColumn = columnIndex + 1;
@@ -316,20 +316,17 @@ function readWorksheetValueRow(rowXml: string, sharedStrings: string[], options:
   return values;
 }
 
-function decodeCellXml(
-  attrs: Record<string, string>,
-  innerXml: string,
-  sharedStrings: string[],
-  options: ReadOptions,
-): CellValue {
+interface CellAttributes {
+  r?: string | undefined;
+  t?: string | undefined;
+}
+
+function decodeCellXml(attrs: CellAttributes, innerXml: string, sharedStrings: string[], options: ReadOptions): CellValue {
   const formulaText = firstTagText(innerXml, "f");
   if (formulaText !== undefined && options.formulas === "preserve") {
     return formula(
       formulaText.startsWith("=") ? formulaText.slice(1) : formulaText,
-      decodeCellXml(attrs, innerXml.replace(/<f\b[^>]*>[\s\S]*?<\/f>/, ""), sharedStrings, {
-        ...options,
-        formulas: "values",
-      }),
+      decodeCellXml(attrs, innerXml, sharedStrings, { ...options, formulas: "values" }),
     );
   }
   if (attrs.t === "s") return sharedStrings[Number(firstTagText(innerXml, "v"))] ?? null;
@@ -342,18 +339,36 @@ function decodeCellXml(
   return Number.isFinite(number) ? number : rawValue;
 }
 
-function parseXmlAttributes(tag: string): Record<string, string> {
-  const attrs: Record<string, string> = {};
-  const regex = /([\w:-]+)="([^"]*)"/g;
-  let match: RegExpExecArray | null;
-  while ((match = regex.exec(tag)) !== null) attrs[match[1]!] = unescapeXml(match[2]!);
+function parseCellAttributes(tag: string): CellAttributes {
+  const attrs: CellAttributes = {};
+  const ref = readXmlAttribute(tag, "r");
+  const type = readXmlAttribute(tag, "t");
+  if (ref !== undefined) attrs.r = ref;
+  if (type !== undefined) attrs.t = type;
   return attrs;
 }
 
+function readXmlAttribute(tag: string, name: string): string | undefined {
+  const marker = `${name}=`;
+  const markerIndex = tag.indexOf(marker);
+  if (markerIndex === -1) return undefined;
+
+  const quoteIndex = markerIndex + marker.length;
+  const quote = tag[quoteIndex];
+  if (quote !== "\"" && quote !== "'") return undefined;
+
+  const valueStart = quoteIndex + 1;
+  const valueEnd = tag.indexOf(quote, valueStart);
+  return valueEnd === -1 ? undefined : unescapeXml(tag.slice(valueStart, valueEnd));
+}
+
 function firstTagText(xml: string, tag: string): string | undefined {
-  const regex = new RegExp(`<${tag}\\b[^>]*>([\\s\\S]*?)<\\/${tag}>`);
-  const match = regex.exec(xml);
-  return match === null ? undefined : unescapeXml(match[1]!);
+  const start = xml.indexOf(`<${tag}`);
+  if (start === -1) return undefined;
+  const openEnd = xml.indexOf(">", start);
+  if (openEnd === -1) return undefined;
+  const end = xml.indexOf(`</${tag}>`, openEnd);
+  return end === -1 ? undefined : unescapeXml(xml.slice(openEnd + 1, end));
 }
 
 function inlineStringText(xml: string): string | null {
@@ -500,6 +515,8 @@ function escapeXml(value: string): string {
 
 function unescapeXml(value: string): string {
   return value
+    .replace(/&#x([0-9a-fA-F]+);/g, (_match, hex: string) => String.fromCodePoint(Number.parseInt(hex, 16)))
+    .replace(/&#(\d+);/g, (_match, decimal: string) => String.fromCodePoint(Number.parseInt(decimal, 10)))
     .replace(/&quot;/g, "\"")
     .replace(/&apos;/g, "'")
     .replace(/&lt;/g, "<")
