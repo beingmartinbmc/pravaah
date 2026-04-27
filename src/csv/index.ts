@@ -50,17 +50,28 @@ function drainCsvByScanningRecords(source: string | Buffer, options: ReadOptions
     const stats = createStats();
     const stream = typeof source === "string" ? createReadStream(source) : Readable.from(source);
     const scanner = createRecordScanner((options.headers ?? true) === true, (options.delimiter ?? ",").charCodeAt(0));
+    let failed = false;
 
     stream.on("data", (chunk: Buffer | string) => {
-      scanner.scan(typeof chunk === "string" ? Buffer.from(chunk) : chunk);
-      stats.rowsProcessed = scanner.rows;
-      observeMemory(stats);
+      try {
+        scanner.scan(typeof chunk === "string" ? Buffer.from(chunk) : chunk);
+        stats.rowsProcessed = scanner.rows;
+        observeMemory(stats);
+      } catch (error) {
+        failed = true;
+        stream.destroy(error instanceof Error ? error : new Error(String(error)));
+      }
     });
     stream.on("error", reject);
     stream.on("end", () => {
-      scanner.finish();
-      stats.rowsProcessed = scanner.rows;
-      resolve(finishStats(stats));
+      if (failed) return;
+      try {
+        scanner.finish();
+        stats.rowsProcessed = scanner.rows;
+        resolve(finishStats(stats));
+      } catch (error) {
+        reject(error);
+      }
     });
   });
 }
@@ -115,10 +126,22 @@ function createRecordScanner(skipFirstRecord: boolean, delimiter: number): {
           continue;
         }
 
-        if (quotePending) {
+        if (quotePending && byte === delimiter) {
           inQuotes = false;
           quotePending = false;
+          atFieldStart = true;
+          continue;
         }
+
+        if (quotePending && (byte === 10 || byte === 13)) {
+          inQuotes = false;
+          quotePending = false;
+          endRecord();
+          lastWasCarriageReturn = byte === 13;
+          continue;
+        }
+
+        if (quotePending) throw new Error("Invalid quoted CSV field");
 
         if (!inQuotes && (byte === 10 || byte === 13)) {
           endRecord();
@@ -142,6 +165,11 @@ function createRecordScanner(skipFirstRecord: boolean, delimiter: number): {
       }
     },
     finish() {
+      if (inQuotes && !quotePending) throw new Error("Unclosed quoted CSV field");
+      if (quotePending) {
+        inQuotes = false;
+        quotePending = false;
+      }
       if (recordHasContent) endRecord();
     },
   };

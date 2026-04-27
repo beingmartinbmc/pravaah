@@ -135,9 +135,9 @@ Each engine runs in its own fresh Node process via `npm run benchmark:isolated`.
 
 | Engine | Time | Peak RSS |
 | --- | ---: | ---: |
-| `sheetra:csv:raw-drain` | 521ms | 116MB |
-| `fast-csv:stream` | 8.28s | 139MB |
-| `sheetjs:xlsx:readFile` | 6.63s | 3.41GB |
+| `sheetra:csv:raw-drain` | 801ms | 116MB |
+| `fast-csv:stream` | 8.42s | 154MB |
+| `sheetjs:xlsx:readFile` | 6.98s | 3.41GB |
 
 Sheetra now wins this raw drain workload by scanning CSV records directly instead of parsing every cell and allocating every row object. It still keeps the data-pipeline ergonomics (`map`, `filter`, `clean`, `schema`, `write`) for workloads that need actual row values.
 
@@ -155,9 +155,9 @@ When no transforms are applied to a CSV pipeline, `read(...).drain()` uses a byt
 
 | Engine | Time | Peak RSS |
 | --- | ---: | ---: |
-| `sheetra:xlsx` | 346ms | 178MB |
-| `sheetjs:xlsx:readFile` | 416ms | 236MB |
-| `exceljs:xlsx:readFile` | 543ms | 293MB |
+| `sheetra:xlsx` | 359ms | 178MB |
+| `sheetjs:xlsx:readFile` | 447ms | 237MB |
+| `exceljs:xlsx:readFile` | 580ms | 300MB |
 
 XLSX reads avoid full worksheet DOM parsing on the hot path. Sheetra scans worksheet XML and shared strings directly, creates only the row objects it yields, and now beats both SheetJS and ExcelJS on this benchmark for time and memory.
 

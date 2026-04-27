@@ -115,6 +115,15 @@ describe("Sheetra pipeline", () => {
     expect(stats.rowsProcessed).toBe(2);
   });
 
+  it("rejects malformed quoted CSV in the raw drain scanner", async () => {
+    await expect(read(Buffer.from('id,note\n1,"unterminated'), { format: "csv" }).drain()).rejects.toThrow(
+      "Unclosed quoted CSV field",
+    );
+    await expect(read(Buffer.from('id,note\n1,"x"y'), { format: "csv" }).drain()).rejects.toThrow(
+      "Invalid quoted CSV field",
+    );
+  });
+
   it("falls back to the iterator path when CSV pipelines are transformed", async () => {
     const dir = await mkdtemp(join(tmpdir(), "sheetra-"));
     const file = join(dir, "transformed.csv");
